@@ -1,7 +1,10 @@
 use crate::markers::ResolutionSupport;
 use crate::{conversion, ic, Address, Config, Error, FaultQueue, Lm75, OsMode, OsPolarity};
 use core::marker::PhantomData;
+#[cfg(not(feature = "async"))]
 use embedded_hal::i2c;
+#[cfg(feature = "async")]
+use embedded_hal_async::i2c;
 
 struct Register;
 
@@ -46,27 +49,32 @@ impl<I2C, IC> Lm75<I2C, IC> {
     }
 }
 
+#[maybe_async_cfg::maybe(
+    sync(cfg(not(feature = "async")), keep_self),
+    async(feature = "async", keep_self)
+)]
 impl<I2C, IC, E> Lm75<I2C, IC>
 where
     I2C: i2c::I2c<Error = E>,
     IC: ResolutionSupport<E>,
 {
     /// Enable the sensor (default state).
-    pub fn enable(&mut self) -> Result<(), Error<E>> {
+    pub async fn enable(&mut self) -> Result<(), Error<E>> {
         let config = self.config;
-        self.write_config(config.with_low(BitFlags::SHUTDOWN))
+        self.write_config(config.with_low(BitFlags::SHUTDOWN)).await
     }
 
     /// Disable the sensor (shutdown).
-    pub fn disable(&mut self) -> Result<(), Error<E>> {
+    pub async fn disable(&mut self) -> Result<(), Error<E>> {
         let config = self.config;
         self.write_config(config.with_high(BitFlags::SHUTDOWN))
+            .await
     }
 
     /// Set the fault queue.
     ///
     /// Set the number of consecutive faults that will trigger an OS condition.
-    pub fn set_fault_queue(&mut self, fq: FaultQueue) -> Result<(), Error<E>> {
+    pub async fn set_fault_queue(&mut self, fq: FaultQueue) -> Result<(), Error<E>> {
         let config = self.config;
         match fq {
             FaultQueue::_1 => self.write_config(
@@ -90,29 +98,32 @@ where
                     .with_high(BitFlags::FAULT_QUEUE0),
             ),
         }
+        .await
     }
 
     /// Set the OS polarity.
-    pub fn set_os_polarity(&mut self, polarity: OsPolarity) -> Result<(), Error<E>> {
+    pub async fn set_os_polarity(&mut self, polarity: OsPolarity) -> Result<(), Error<E>> {
         let config = self.config;
         match polarity {
             OsPolarity::ActiveLow => self.write_config(config.with_low(BitFlags::OS_POLARITY)),
             OsPolarity::ActiveHigh => self.write_config(config.with_high(BitFlags::OS_POLARITY)),
         }
+        .await
     }
 
     /// Set the OS operation mode.
-    pub fn set_os_mode(&mut self, mode: OsMode) -> Result<(), Error<E>> {
+    pub async fn set_os_mode(&mut self, mode: OsMode) -> Result<(), Error<E>> {
         let config = self.config;
         match mode {
             OsMode::Comparator => self.write_config(config.with_low(BitFlags::COMP_INT)),
             OsMode::Interrupt => self.write_config(config.with_high(BitFlags::COMP_INT)),
         }
+        .await
     }
 
     /// Set the OS temperature (celsius).
     #[allow(clippy::manual_range_contains)]
-    pub fn set_os_temperature(&mut self, temperature: f32) -> Result<(), Error<E>> {
+    pub async fn set_os_temperature(&mut self, temperature: f32) -> Result<(), Error<E>> {
         if temperature < -55.0 || temperature > 125.0 {
             return Err(Error::InvalidInputData);
         }
@@ -120,12 +131,13 @@ where
             conversion::convert_temp_to_register(temperature, IC::get_resolution_mask());
         self.i2c
             .write(self.address, &[Register::T_OS, msb, lsb])
+            .await
             .map_err(Error::I2C)
     }
 
     /// Set the hysteresis temperature (celsius).
     #[allow(clippy::manual_range_contains)]
-    pub fn set_hysteresis_temperature(&mut self, temperature: f32) -> Result<(), Error<E>> {
+    pub async fn set_hysteresis_temperature(&mut self, temperature: f32) -> Result<(), Error<E>> {
         if temperature < -55.0 || temperature > 125.0 {
             return Err(Error::InvalidInputData);
         }
@@ -133,14 +145,16 @@ where
             conversion::convert_temp_to_register(temperature, IC::get_resolution_mask());
         self.i2c
             .write(self.address, &[Register::T_HYST, msb, lsb])
+            .await
             .map_err(Error::I2C)
     }
 
     /// Read the temperature from the sensor (celsius).
-    pub fn read_temperature(&mut self) -> Result<f32, Error<E>> {
+    pub async fn read_temperature(&mut self) -> Result<f32, Error<E>> {
         let mut data = [0; 2];
         self.i2c
             .write_read(self.address, &[Register::TEMPERATURE], &mut data)
+            .await
             .map_err(Error::I2C)?;
         Ok(conversion::convert_temp_from_register(
             data[0],
@@ -150,15 +164,20 @@ where
     }
 
     /// write configuration to device
-    fn write_config(&mut self, config: Config) -> Result<(), Error<E>> {
+    async fn write_config(&mut self, config: Config) -> Result<(), Error<E>> {
         self.i2c
             .write(self.address, &[Register::CONFIGURATION, config.bits])
+            .await
             .map_err(Error::I2C)?;
         self.config = config;
         Ok(())
     }
 }
 
+#[maybe_async_cfg::maybe(
+    sync(cfg(not(feature = "async")), keep_self),
+    async(feature = "async", keep_self)
+)]
 impl<I2C, E> Lm75<I2C, ic::Pct2075>
 where
     I2C: i2c::I2c<Error = E>,
@@ -178,21 +197,23 @@ where
     ///
     /// For values outside of the range `[100 - 3100]` or those not a multiple of 100,
     /// `Error::InvalidInputData will be returned
-    pub fn set_sample_rate(&mut self, period: u16) -> Result<(), Error<E>> {
+    pub async fn set_sample_rate(&mut self, period: u16) -> Result<(), Error<E>> {
         if period > 3100 || period % 100 != 0 {
             return Err(Error::InvalidInputData);
         }
         let byte = conversion::convert_sample_rate_to_register(period);
         self.i2c
             .write(self.address, &[Register::T_IDLE, byte])
+            .await
             .map_err(Error::I2C)
     }
 
     /// Read the sample rate period from the sensor (ms).
-    pub fn read_sample_rate(&mut self) -> Result<u16, Error<E>> {
+    pub async fn read_sample_rate(&mut self) -> Result<u16, Error<E>> {
         let mut data = [0; 1];
         self.i2c
             .write_read(self.address, &[Register::T_IDLE], &mut data)
+            .await
             .map_err(Error::I2C)?;
         Ok(conversion::convert_sample_rate_from_register(data[0]))
     }
